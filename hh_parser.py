@@ -4,138 +4,84 @@ from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
-SPECIALIZATION_QUERIES = {
-    "SMM / Соцсети": ["SMM менеджер", "менеджер социальных сетей", "контент менеджер"],
-    "Digital / Performance": ["performance маркетолог", "digital маркетолог", "таргетолог", "контекстная реклама"],
-    "Brand / Маркетинг": ["бренд менеджер", "маркетолог", "product маркетолог"],
-    "PR / Коммуникации": ["PR менеджер", "специалист по коммуникациям", "пресс-секретарь"],
-    "Контент / Копирайтинг": ["копирайтер", "редактор", "контент-стратег"],
-    "Другое": ["маркетолог", "marketing manager"],
+# Маппинг специализаций на теги Jobicy
+SPECIALIZATION_TAGS = {
+    "SMM / Соцсети": ["social-media", "content-marketing", "marketing"],
+    "Digital / Performance": ["digital-marketing", "performance-marketing", "marketing"],
+    "Brand / Маркетинг": ["marketing", "brand-marketing", "product-marketing"],
+    "PR / Коммуникации": ["public-relations", "communications", "marketing"],
+    "Контент / Копирайтинг": ["copywriting", "content-marketing", "marketing"],
+    "Другое": ["marketing"],
 }
 
-EXPERIENCE_MAP = {
-    "Нет опыта (0–1 год)": "noExperience",
-    "Junior (1–2 года)": "between1And3",
-    "Middle (2–4 года)": "between3And6",
-    "Senior (4+ лет)": "moreThan6",
-}
-
-HH_RU = "https://api.hh.ru/vacancies"
-HH_UZ = "https://api.hh.uz/vacancies"
+JOBICY_API = "https://jobicy.com/api/v2/remote-jobs"
 
 
 class HHParser:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (compatible; MarketingJobsBot/1.0)",
             "Accept": "application/json",
-            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-            "HH-User-Agent": "MarketingJobsBot/1.0 (maftunaernazarova1997@gmail.com)",
         })
 
     def fetch_jobs(self, specialization: str, city: str,
                    experience: str, limit: int = 8) -> List[Dict]:
-        queries = SPECIALIZATION_QUERIES.get(specialization, ["маркетолог"])
-        exp_code = EXPERIENCE_MAP.get(experience, "between1And3")
-        city_lower = city.lower().strip()
 
-        # Для Ташкента используем hh.uz, для остальных hh.ru
-        if "ташкент" in city_lower or "tashkent" in city_lower:
-            base_url = HH_UZ
-        else:
-            base_url = HH_RU
-
-        area_id = self._get_area_id(city_lower)
+        tags = SPECIALIZATION_TAGS.get(specialization, ["marketing"])
         all_jobs = []
         seen_ids = set()
 
-        for query in queries[:2]:
+        for tag in tags[:2]:
             try:
                 params = {
-                    "text": query,
-                    "experience": exp_code,
-                    "per_page": limit,
-                    "order_by": "publication_time",
+                    "count": limit,
+                    "tag": tag,
+                    "industry": "marketing",
                 }
-                if area_id:
-                    params["area"] = area_id
-                elif "удалённо" in city_lower or "удаленно" in city_lower:
-                    params["schedule"] = "remote"
-
-                resp = self.session.get(base_url, params=params, timeout=10)
+                resp = self.session.get(JOBICY_API, params=params, timeout=10)
                 resp.raise_for_status()
                 data = resp.json()
 
-                for item in data.get("items", []):
-                    if item["id"] in seen_ids:
+                for item in data.get("jobs", []):
+                    if item.get("id") in seen_ids:
                         continue
-                    seen_ids.add(item["id"])
+                    seen_ids.add(item.get("id"))
                     all_jobs.append(self._format_job(item))
 
             except Exception as e:
-                logger.error(f"HH fetch error for '{query}' on {base_url}: {e}")
+                logger.error(f"Jobicy fetch error for tag '{tag}': {e}")
 
-        # Fallback — ищем удалённые вакансии на hh.ru если ничего не нашли
+        # Запасной запрос без тега если ничего не нашли
         if not all_jobs:
-            logger.info("No jobs found, trying remote fallback on hh.ru...")
             try:
-                params = {
-                    "text": queries[0],
-                    "experience": exp_code,
-                    "per_page": limit,
-                    "order_by": "publication_time",
-                    "schedule": "remote",
-                }
-                resp = self.session.get(HH_RU, params=params, timeout=10)
+                params = {"count": limit, "industry": "marketing"}
+                resp = self.session.get(JOBICY_API, params=params, timeout=10)
                 resp.raise_for_status()
                 data = resp.json()
-                for item in data.get("items", []):
+                for item in data.get("jobs", []):
                     all_jobs.append(self._format_job(item))
                 logger.info(f"Fallback found {len(all_jobs)} jobs")
             except Exception as e:
-                logger.error(f"Fallback fetch error: {e}")
+                logger.error(f"Jobicy fallback error: {e}")
 
         return all_jobs[:limit]
 
     def _format_job(self, item: dict) -> Dict:
-        salary = self._format_salary(item.get("salary"))
+        salary = item.get("annualSalaryMin") or item.get("annualSalaryMax")
+        if salary:
+            salary_str = f"от ${item['annualSalaryMin']:,}" if item.get("annualSalaryMin") else f"до ${item['annualSalaryMax']:,}"
+        else:
+            salary_str = "з/п не указана"
+
         return {
-            "id": item["id"],
-            "name": item["name"],
-            "employer": item.get("employer", {}).get("name", "—"),
-            "salary": salary,
-            "url": item.get("alternate_url", ""),
-            "city": item.get("area", {}).get("name", ""),
+            "id": str(item.get("id", "")),
+            "name": item.get("jobTitle", "—"),
+            "employer": item.get("companyName", "—"),
+            "salary": salary_str,
+            "url": item.get("url", ""),
+            "city": item.get("jobGeo", "Remote"),
         }
-
-    def _format_salary(self, salary: dict) -> str:
-        if not salary:
-            return "з/п не указана"
-        from_val = salary.get("from")
-        to_val = salary.get("to")
-        currency = salary.get("currency", "RUR")
-        currency_sym = {"RUR": "₽", "USD": "$", "EUR": "€", "KZT": "₸", "UZS": "сум"}.get(currency, currency)
-
-        if from_val and to_val:
-            return f"{from_val:,}–{to_val:,} {currency_sym}"
-        elif from_val:
-            return f"от {from_val:,} {currency_sym}"
-        elif to_val:
-            return f"до {to_val:,} {currency_sym}"
-        return "з/п не указана"
 
     def _get_area_id(self, city_lower: str) -> str:
-        city_map = {
-            "москва": "1",
-            "санкт-петербург": "2",
-            "спб": "2",
-            "екатеринбург": "3",
-            "новосибирск": "4",
-            "казань": "88",
-            "нижний новгород": "66",
-        }
-        for key, val in city_map.items():
-            if key in city_lower:
-                return val
         return None
