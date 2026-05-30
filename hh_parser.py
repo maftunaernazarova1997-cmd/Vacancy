@@ -29,7 +29,10 @@ class HHParser:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "MarketingJobsBot/1.0 (jobs aggregator)"
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+            "HH-User-Agent": "MarketingJobsBot/1.0 (maftunaernazarova1997@gmail.com)",
         })
 
     def fetch_jobs(self, specialization: str, city: str,
@@ -50,7 +53,7 @@ class HHParser:
                     "experience": exp_code,
                     "per_page": limit,
                     "order_by": "publication_time",
-                    "search_field": "name",
+                    "only_with_salary": False,
                 }
                 if area_id:
                     params["area"] = area_id
