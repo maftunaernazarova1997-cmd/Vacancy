@@ -4,29 +4,50 @@ from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
-# Маппинг специализаций на теги Jobicy
+JOBICY_API = "https://jobicy.com/api/v2/remote-jobs"
+
 SPECIALIZATION_TAGS = {
-    "SMM / Соцсети": ["social-media", "content-marketing", "marketing"],
-    "Digital / Performance": ["digital-marketing", "performance-marketing", "marketing"],
-    "Brand / Маркетинг": ["marketing", "brand-marketing", "product-marketing"],
-    "PR / Коммуникации": ["public-relations", "communications", "marketing"],
-    "Контент / Копирайтинг": ["copywriting", "content-marketing", "marketing"],
-    "Другое": ["marketing"],
+    "SMM / Соцсети":            ["social-media", "content-marketing"],
+    "Digital / Performance":    ["digital-marketing", "performance-marketing"],
+    "Brand / Маркетинг":        ["marketing", "brand-marketing"],
+    "PR / Коммуникации":        ["public-relations", "communications"],
+    "Контент / Копирайтинг":    ["copywriting", "content-marketing"],
+    "Product Manager":          ["product-management"],
+    "Data / Аналитика":         ["data-analysis", "data-science"],
+    "Design / UX":              ["ux", "design"],
+    "Frontend":                 ["frontend", "javascript"],
+    "Backend":                  ["backend", "python"],
+    "HR / Рекрутинг":           ["human-resources", "recruiting"],
+    "Финансы":                  ["finance", "accounting"],
+    "Customer Success":         ["customer-success", "customer-support"],
+    "Другое":                   ["marketing"],
 }
 
-JOBICY_API = "https://jobicy.com/api/v2/remote-jobs"
+SPECIALIZATION_GROUPS = {
+    "📣 Маркетинг": [
+        "SMM / Соцсети", "Digital / Performance",
+        "Brand / Маркетинг", "PR / Коммуникации", "Контент / Копирайтинг"
+    ],
+    "💻 IT": [
+        "Product Manager", "Data / Аналитика",
+        "Design / UX", "Frontend", "Backend"
+    ],
+    "🗂 Другое": [
+        "HR / Рекрутинг", "Финансы", "Customer Success", "Другое"
+    ],
+}
 
 
 class HHParser:
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (compatible; MarketingJobsBot/1.0)",
+            "User-Agent": "Mozilla/5.0 (compatible; JobsBot/1.0)",
             "Accept": "application/json",
         })
 
-    def fetch_jobs(self, specialization: str, city: str,
-                   experience: str, limit: int = 8) -> List[Dict]:
+    def fetch_jobs(self, specialization: str, city: str = "",
+                   experience: str = "", limit: int = 8) -> List[Dict]:
 
         tags = SPECIALIZATION_TAGS.get(specialization, ["marketing"])
         all_jobs = []
@@ -34,53 +55,46 @@ class HHParser:
 
         for tag in tags[:2]:
             try:
-                params = {
-                    "count": limit,
-                    "tag": tag,
-                    "industry": "marketing",
-                }
-                resp = self.session.get(JOBICY_API, params=params, timeout=10)
+                resp = self.session.get(JOBICY_API, params={
+                    "count": limit, "tag": tag
+                }, timeout=10)
                 resp.raise_for_status()
-                data = resp.json()
-
-                for item in data.get("jobs", []):
-                    if item.get("id") in seen_ids:
-                        continue
-                    seen_ids.add(item.get("id"))
-                    all_jobs.append(self._format_job(item))
-
+                for item in resp.json().get("jobs", []):
+                    if item.get("id") not in seen_ids:
+                        seen_ids.add(item.get("id"))
+                        all_jobs.append(self._format_job(item))
             except Exception as e:
-                logger.error(f"Jobicy fetch error for tag '{tag}': {e}")
+                logger.error(f"Jobicy error for '{tag}': {e}")
 
-        # Запасной запрос без тега если ничего не нашли
         if not all_jobs:
             try:
-                params = {"count": limit, "industry": "marketing"}
-                resp = self.session.get(JOBICY_API, params=params, timeout=10)
+                resp = self.session.get(JOBICY_API, params={"count": limit}, timeout=10)
                 resp.raise_for_status()
-                data = resp.json()
-                for item in data.get("jobs", []):
-                    all_jobs.append(self._format_job(item))
-                logger.info(f"Fallback found {len(all_jobs)} jobs")
+                all_jobs = [self._format_job(i) for i in resp.json().get("jobs", [])]
             except Exception as e:
                 logger.error(f"Jobicy fallback error: {e}")
 
         return all_jobs[:limit]
 
     def _format_job(self, item: dict) -> Dict:
-        salary = item.get("annualSalaryMin") or item.get("annualSalaryMax")
-        if salary:
-            salary_str = f"от ${item['annualSalaryMin']:,}" if item.get("annualSalaryMin") else f"до ${item['annualSalaryMax']:,}"
+        min_s = item.get("annualSalaryMin")
+        max_s = item.get("annualSalaryMax")
+        if min_s and max_s:
+            salary = f"${min_s:,}–${max_s:,}/год"
+        elif min_s:
+            salary = f"от ${min_s:,}/год"
+        elif max_s:
+            salary = f"до ${max_s:,}/год"
         else:
-            salary_str = "з/п не указана"
+            salary = "з/п не указана"
 
         return {
             "id": str(item.get("id", "")),
             "name": item.get("jobTitle", "—"),
             "employer": item.get("companyName", "—"),
-            "salary": salary_str,
+            "salary": salary,
             "url": item.get("url", ""),
-            "city": item.get("jobGeo", "Remote"),
+            "city": "🌍 Remote",
         }
 
     def _get_area_id(self, city_lower: str) -> str:
