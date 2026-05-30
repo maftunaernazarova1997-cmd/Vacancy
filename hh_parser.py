@@ -4,7 +4,6 @@ from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
-# Маппинг специализаций на поисковые запросы hh.ru
 SPECIALIZATION_QUERIES = {
     "SMM / Соцсети": ["SMM менеджер", "менеджер социальных сетей", "контент менеджер"],
     "Digital / Performance": ["performance маркетолог", "digital маркетолог", "таргетолог", "контекстная реклама"],
@@ -14,7 +13,6 @@ SPECIALIZATION_QUERIES = {
     "Другое": ["маркетолог", "marketing manager"],
 }
 
-# Маппинг опыта на коды hh.ru
 EXPERIENCE_MAP = {
     "Нет опыта (0–1 год)": "noExperience",
     "Junior (1–2 года)": "between1And3",
@@ -22,7 +20,8 @@ EXPERIENCE_MAP = {
     "Senior (4+ лет)": "moreThan6",
 }
 
-HH_API = "https://api.hh.ru/vacancies"
+HH_RU = "https://api.hh.ru/vacancies"
+HH_UZ = "https://api.hh.uz/vacancies"
 
 
 class HHParser:
@@ -39,28 +38,32 @@ class HHParser:
                    experience: str, limit: int = 8) -> List[Dict]:
         queries = SPECIALIZATION_QUERIES.get(specialization, ["маркетолог"])
         exp_code = EXPERIENCE_MAP.get(experience, "between1And3")
+        city_lower = city.lower().strip()
 
-        # Определяем area_id для города
-        area_id = self._get_area_id(city)
+        # Для Ташкента используем hh.uz, для остальных hh.ru
+        if "ташкент" in city_lower or "tashkent" in city_lower:
+            base_url = HH_UZ
+        else:
+            base_url = HH_RU
 
+        area_id = self._get_area_id(city_lower)
         all_jobs = []
         seen_ids = set()
 
-        for query in queries[:2]:  # берём 2 первых запроса
+        for query in queries[:2]:
             try:
                 params = {
                     "text": query,
                     "experience": exp_code,
                     "per_page": limit,
                     "order_by": "publication_time",
-                    "only_with_salary": False,
                 }
                 if area_id:
                     params["area"] = area_id
-                elif "удалённо" in city.lower() or "удаленно" in city.lower():
+                elif "удалённо" in city_lower or "удаленно" in city_lower:
                     params["schedule"] = "remote"
 
-                resp = self.session.get(HH_API, params=params, timeout=10)
+                resp = self.session.get(base_url, params=params, timeout=10)
                 resp.raise_for_status()
                 data = resp.json()
 
@@ -71,7 +74,27 @@ class HHParser:
                     all_jobs.append(self._format_job(item))
 
             except Exception as e:
-                logger.error(f"HH fetch error for '{query}': {e}")
+                logger.error(f"HH fetch error for '{query}' on {base_url}: {e}")
+
+        # Fallback — ищем удалённые вакансии на hh.ru если ничего не нашли
+        if not all_jobs:
+            logger.info("No jobs found, trying remote fallback on hh.ru...")
+            try:
+                params = {
+                    "text": queries[0],
+                    "experience": exp_code,
+                    "per_page": limit,
+                    "order_by": "publication_time",
+                    "schedule": "remote",
+                }
+                resp = self.session.get(HH_RU, params=params, timeout=10)
+                resp.raise_for_status()
+                data = resp.json()
+                for item in data.get("items", []):
+                    all_jobs.append(self._format_job(item))
+                logger.info(f"Fallback found {len(all_jobs)} jobs")
+            except Exception as e:
+                logger.error(f"Fallback fetch error: {e}")
 
         return all_jobs[:limit]
 
@@ -102,8 +125,7 @@ class HHParser:
             return f"до {to_val:,} {currency_sym}"
         return "з/п не указана"
 
-    def _get_area_id(self, city: str) -> str:
-        """Возвращает area_id для hh.ru по названию города"""
+    def _get_area_id(self, city_lower: str) -> str:
         city_map = {
             "москва": "1",
             "санкт-петербург": "2",
@@ -112,10 +134,8 @@ class HHParser:
             "новосибирск": "4",
             "казань": "88",
             "нижний новгород": "66",
-            "ташкент": None,  # hh.ru Узбекистан — отдельный домен
         }
-        city_lower = city.lower().strip()
         for key, val in city_map.items():
             if key in city_lower:
                 return val
-        return None  # hh.ru сам найдёт по всей России
+        return None
